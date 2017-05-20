@@ -261,11 +261,12 @@ void loop() {
   //-------- Your Sketch ---------------
   rf.loop();
 
+/*
   if (!client.connected()) {
     reconnect_mqtt();
   }
   client.loop();
-
+*/
 }
 //------------------------- END LOOP --------------------------------------------
 
