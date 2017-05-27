@@ -7,9 +7,10 @@
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <PubSubClient.h>
-#include <ESPiLight.h>
+#include <RCSwitch.h>
 
-ESPiLight rf(D1);
+RCSwitch mySwitch = RCSwitch();
+
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -69,16 +70,14 @@ void callback_mqtt(char* topic, byte* payload, unsigned int length) {
   str_payload = str_payload.substring(0, length);
   DEBUG_PRINT("Sending:");
   DEBUG_PRINTLN(str_payload);
-  rf.send(str_topic, str_payload);
+  //rf.send(str_topic, str_payload);
 
-//  // Switch on the LED if an 1 was received as first character
-//  if ((char)payload[0] == '1') {
-//    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
-//    // but actually the LED is on; this is because
-//    // it is acive low on the ESP-01)
-//  } else {
-//    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
-//  }
+  if (str_payload.startsWith("0")) {
+    mySwitch.switchOff("10010", "00010"); 
+  } else {
+    mySwitch.switchOn("10010", "00010"); 
+  }
+   
 }
 
 
@@ -110,51 +109,15 @@ void reconnect_mqtt() {
 }
 
 
-void rfCallback(const String &protocol, const String &message, int status, int repeats, const String &deviceID) {
-  DEBUG_PRINT("RF signal arrived [");
-  DEBUG_PRINT(protocol); //protocoll used to parse
-  DEBUG_PRINT("][");
-  DEBUG_PRINT(deviceID); //value of id key in json message
-  DEBUG_PRINT("] (");
-  DEBUG_PRINT(status);  //status of message, depending on repeat, either: 
-                         // FIRST   - first message of this protocoll within the last 0.5 s
-                         // INVALID - message repeat is not equal to the previous message
-                         // VALID   - message is equal to the previous message
-                         // KNOWN   - repeat of a already valid message
-  DEBUG_PRINT(") ");
-  DEBUG_PRINT(message); // message in json format
-  DEBUG_PRINTLN();
-
-  // check if message is valid and process it
-  if(status==FIRST) {
-    DEBUG_PRINT("Valid message: [");
-    DEBUG_PRINT(protocol);
-    DEBUG_PRINT("] ");
-    DEBUG_PRINT(message);
-    DEBUG_PRINTLN();
-
-    char topic[64];
-    sprintf(topic, "%s/incoming/%s", mqtt_topic, protocol.c_str());
-
-    //char buffer[128];
-    //String escaped_message = message;    
-    //escaped_message.replace('"', '\"');
-    //sprintf(buffer, "{\"protocol\":\"%s\",\"message\":\"%s\"}", protocol.c_str(), escaped_message.c_str());
-
-    client.publish(topic, message.c_str());
-    DEBUG_PRINT("Published ");
-    DEBUG_PRINT(message);
-    DEBUG_PRINT(" to ");
-    DEBUG_PRINTLN(topic);
-  }
-}
-
 
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
   DEBUG_PRINTLN();
+
+  mySwitch.enableReceive(D2);
+  mySwitch.enableTransmit(D1);
 
   pinMode(MODEBUTTON, INPUT);  // MODEBUTTON as input for Config mode selection
 
@@ -196,7 +159,6 @@ void setup() {
     DEBUG_PRINTLN("failed to mount FS");
   }
   //end read
-
 
 
   //WiFiManager
@@ -265,11 +227,7 @@ void setup() {
 
   DEBUG_PRINTLN("local ip");
   DEBUG_PRINTLN(WiFi.localIP());
-
-  // Init RF receiver
-  rf.setCallback(rfCallback);
-  rf.initReceiver(D2);
-
+  
   // Init PubSubClient
   client.setServer(mqtt_server, atoi(mqtt_port));
   client.setCallback(callback_mqtt);
@@ -277,8 +235,6 @@ void setup() {
 
 
 void loop() {
-  rf.loop();
-
   if ( digitalRead(MODEBUTTON) == LOW ) {
     DEBUG_PRINTLN("+++");
   
@@ -303,4 +259,29 @@ void loop() {
     reconnect_mqtt();
   }
   client.loop();
+
+  if (mySwitch.available()) {
+    
+    int value = mySwitch.getReceivedValue();
+    
+    if (value == 0) {
+      Serial.print("Unknown encoding");
+    } else {
+      Serial.print("Received ");
+      Serial.print( mySwitch.getReceivedValue() );
+      Serial.print(" / ");
+      Serial.print( mySwitch.getReceivedBitlength() );
+      Serial.print("bit ");
+      Serial.print("Protocol: ");
+      Serial.println( mySwitch.getReceivedProtocol() );
+
+      char topic[64];
+      sprintf(topic, "%s/incoming", mqtt_topic);
+
+      unsigned long val = mySwitch.getReceivedValue();
+      client.publish(topic, String(val).c_str());
+    }
+
+    mySwitch.resetAvailable();
+  }
 }
