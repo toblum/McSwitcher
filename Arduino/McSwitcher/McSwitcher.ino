@@ -62,20 +62,23 @@ void callback_mqtt(char* topic, byte* payload, unsigned int length) {
 
   DEBUG_PRINT("Subtopic:");
   DEBUG_PRINTLN(str_topic);
+  DEBUG_PRINT("Length:");
+  DEBUG_PRINTLN(length);
 
   String str_payload = (char *)payload;
+  str_payload = str_payload.substring(0, length);
   DEBUG_PRINT("Sending:");
   DEBUG_PRINTLN(str_payload);
   rf.send(str_topic, str_payload);
 
-  // Switch on the LED if an 1 was received as first character
-  if ((char)payload[0] == '1') {
-    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    // but actually the LED is on; this is because
-    // it is acive low on the ESP-01)
-  } else {
-    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
-  }
+//  // Switch on the LED if an 1 was received as first character
+//  if ((char)payload[0] == '1') {
+//    digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
+//    // but actually the LED is on; this is because
+//    // it is acive low on the ESP-01)
+//  } else {
+//    digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
+//  }
 }
 
 
@@ -123,7 +126,7 @@ void rfCallback(const String &protocol, const String &message, int status, int r
   DEBUG_PRINTLN();
 
   // check if message is valid and process it
-  if(status==VALID) {
+  if(status==FIRST) {
     DEBUG_PRINT("Valid message: [");
     DEBUG_PRINT(protocol);
     DEBUG_PRINT("] ");
@@ -295,5 +298,9 @@ void loop() {
       delay(5000);
     }
   }
-  
+
+  if (!client.connected()) {
+    reconnect_mqtt();
+  }
+  client.loop();
 }
