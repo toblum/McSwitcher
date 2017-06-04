@@ -72,14 +72,25 @@ void callback_mqtt(char* topic, byte* payload, unsigned int length) {
   DEBUG_PRINTLN(str_payload);
   //rf.send(str_topic, str_payload);
 
-  if (str_payload.startsWith("0")) {
+  int bits = str_topic.toInt();
+  if (bits == 0) {
+    bits = 24;
+  }
+  DEBUG_PRINT("Bits:");
+  DEBUG_PRINTLN(bits);
+  DEBUG_PRINT("Payload:");
+  DEBUG_PRINTLN(str_payload.toInt());
+
+  mySwitch.send(str_payload.toInt(), bits);
+
+  /*
+   * if (str_payload.startsWith("0")) {
     mySwitch.switchOff("10010", "00010"); 
   } else {
     mySwitch.switchOn("10010", "00010"); 
   }
-   
+  */
 }
-
 
 void reconnect_mqtt() {
   // Loop until we're reconnected
@@ -118,6 +129,7 @@ void setup() {
 
   mySwitch.enableReceive(D2);
   mySwitch.enableTransmit(D1);
+  //mySwitch.setRepeatTransmit(5);
 
   pinMode(MODEBUTTON, INPUT);  // MODEBUTTON as input for Config mode selection
 
@@ -261,7 +273,6 @@ void loop() {
   client.loop();
 
   if (mySwitch.available()) {
-    
     int value = mySwitch.getReceivedValue();
     
     if (value == 0) {
@@ -276,7 +287,7 @@ void loop() {
       Serial.println( mySwitch.getReceivedProtocol() );
 
       char topic[64];
-      sprintf(topic, "%s/incoming", mqtt_topic);
+      sprintf(topic, "%s/incoming/%d", mqtt_topic, mySwitch.getReceivedBitlength());
 
       unsigned long val = mySwitch.getReceivedValue();
       client.publish(topic, String(val).c_str());
