@@ -1,18 +1,25 @@
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
 
 #include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
-
 #include <DNSServer.h>
-#include <ESP8266WebServer.h>
-#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
+
+#include <fauxmoESP.h>            //https://bitbucket.org/xoseperez/fauxmoesp
+
+#define WIFI_MANAGER_USE_ASYNC_WEB_SERVER //See: https://bitbucket.org/xoseperez/fauxmoesp/issues/12/wifimanager-cannot-be-used-with-fauxmoesp
+#include <WiFiManager.h>          //Alternative version from: https://github.com/btomer/WiFiManager
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <PubSubClient.h>
 #include <RCSwitch.h>
+#include <SPIFFSEditor.h>
 
 RCSwitch mySwitch = RCSwitch();
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+fauxmoESP fauxmo;
+
+AsyncWebServer server(80);
 
 //define your default values here, if there are different values in config.json, they are overwritten.
 char mqtt_server[40] = "raspberrypi2";
@@ -70,7 +77,6 @@ void callback_mqtt(char* topic, byte* payload, unsigned int length) {
   str_payload = str_payload.substring(0, length);
   DEBUG_PRINT("Sending:");
   DEBUG_PRINTLN(str_payload);
-  //rf.send(str_topic, str_payload);
 
   int bits = str_topic.toInt();
   if (bits == 0) {
@@ -82,14 +88,6 @@ void callback_mqtt(char* topic, byte* payload, unsigned int length) {
   DEBUG_PRINTLN(str_payload.toInt());
 
   mySwitch.send(str_payload.toInt(), bits);
-
-  /*
-   * if (str_payload.startsWith("0")) {
-    mySwitch.switchOff("10010", "00010"); 
-  } else {
-    mySwitch.switchOn("10010", "00010"); 
-  }
-  */
 }
 
 void reconnect_mqtt() {
@@ -113,8 +111,11 @@ void reconnect_mqtt() {
       DEBUG_PRINT("failed, rc=");
       DEBUG_PRINT(client.state());
       DEBUG_PRINTLN(" try again in 5 seconds");
+
+      ESP.restart();
+      
       // Wait 5 seconds before retrying
-      delay(5000);
+      //delay(5000);
     }
   }
 }
@@ -164,6 +165,37 @@ void setup() {
 
         } else {
           DEBUG_PRINTLN("failed to load json config");
+        }
+      }
+    }
+
+    if (SPIFFS.exists("/fauxmo_config.json")) {
+      File fauxmoConfigFile = SPIFFS.open("/fauxmo_config.json", "r");
+      if (fauxmoConfigFile) {
+        DEBUG_PRINTLN("opened fauxmo config file");
+        size_t size = fauxmoConfigFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        fauxmoConfigFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonFauxmoBuffer;
+        JsonObject& fauxmoJson = jsonFauxmoBuffer.parseObject(buf.get());
+       
+        fauxmoJson.printTo(Serial);
+
+        if (fauxmoJson.success()) {
+          DEBUG_PRINTLN("\nparsed fauxmo json");
+
+          for (JsonObject::iterator it=fauxmoJson.begin(); it!=fauxmoJson.end(); ++it)
+          {
+            Serial.println(it->key);
+            
+            JsonObject& data =  it->value;
+            const char* on = data["on"];
+            Serial.println(on);
+            const char* off = data["off"];
+            Serial.println(off);
+          }
         }
       }
     }
@@ -243,6 +275,80 @@ void setup() {
   // Init PubSubClient
   client.setServer(mqtt_server, atoi(mqtt_port));
   client.setCallback(callback_mqtt);
+
+
+  // Init Webserver
+  server.on("/heap", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", String(ESP.getFreeHeap()));
+  });
+
+  server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.htm");
+
+  server.addHandler(new SPIFFSEditor("admin", "admin"));
+
+  server.onNotFound([](AsyncWebServerRequest *request){
+    Serial.printf("NOT_FOUND: ");
+    if(request->method() == HTTP_GET)
+      Serial.printf("GET");
+    else if(request->method() == HTTP_POST)
+      Serial.printf("POST");
+    else if(request->method() == HTTP_DELETE)
+      Serial.printf("DELETE");
+    else if(request->method() == HTTP_PUT)
+      Serial.printf("PUT");
+    else if(request->method() == HTTP_PATCH)
+      Serial.printf("PATCH");
+    else if(request->method() == HTTP_HEAD)
+      Serial.printf("HEAD");
+    else if(request->method() == HTTP_OPTIONS)
+      Serial.printf("OPTIONS");
+    else
+      Serial.printf("UNKNOWN");
+    Serial.printf(" http://%s%s\n", request->host().c_str(), request->url().c_str());
+
+    if(request->contentLength()){
+      Serial.printf("_CONTENT_TYPE: %s\n", request->contentType().c_str());
+      Serial.printf("_CONTENT_LENGTH: %u\n", request->contentLength());
+    }
+
+    int headers = request->headers();
+    int i;
+    for(i=0;i<headers;i++){
+      AsyncWebHeader* h = request->getHeader(i);
+      Serial.printf("_HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
+    }
+
+    int params = request->params();
+    for(i=0;i<params;i++){
+      AsyncWebParameter* p = request->getParam(i);
+      if(p->isFile()){
+        Serial.printf("_FILE[%s]: %s, size: %u\n", p->name().c_str(), p->value().c_str(), p->size());
+      } else if(p->isPost()){
+        Serial.printf("_POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
+      } else {
+        Serial.printf("_GET[%s]: %s\n", p->name().c_str(), p->value().c_str());
+      }
+    }
+
+    request->send(404);
+  });
+
+  server.onFileUpload([](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final){
+    if(!index)
+      Serial.printf("UploadStart: %s\n", filename.c_str());
+    Serial.printf("%s", (const char*)data);
+    if(final)
+      Serial.printf("UploadEnd: %s (%u)\n", filename.c_str(), index+len);
+  });
+
+  server.begin();
+  
+  
+  // Init Fauxmo
+  fauxmo.addDevice("Leselampe");
+  fauxmo.onMessage([](unsigned char device_id, const char * device_name, bool state) {
+    Serial.printf("[MAIN] Device #%d (%s) state: %s\n", device_id, device_name, state ? "ON" : "OFF");
+  });
 }
 
 
@@ -272,6 +378,8 @@ void loop() {
   }
   client.loop();
 
+  fauxmo.handle();
+
   if (mySwitch.available()) {
     int value = mySwitch.getReceivedValue();
     
@@ -285,6 +393,8 @@ void loop() {
       Serial.print("bit ");
       Serial.print("Protocol: ");
       Serial.println( mySwitch.getReceivedProtocol() );
+      Serial.print("Free: ");
+      Serial.println( system_get_free_heap_size() );
 
       char topic[64];
       sprintf(topic, "%s/incoming/%d", mqtt_topic, mySwitch.getReceivedBitlength());
